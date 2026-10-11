@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Machine Failure Prediction</title>
+<link rel="icon" type="image/png" href="icon.png">
+<style>
+  :root { --bg:#f3f4f6; --card:#fff; --text:#111827; --muted:#6b7280; --line:#d1d5db; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111827; --card:#1f2937; --text:#f3f4f6; --muted:#9ca3af; --line:#374151; --accent:#3b82f6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text);
+         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; background:var(--card); border-radius:16px;
+         padding:28px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
+  header { text-align:center; margin-bottom:8px; }
+  header img { width:72px; height:72px; }
+  h1 { margin:8px 0 0; font-size:1.6rem; }
+  .sub { text-align:center; color:var(--muted); margin:4px 0 20px; }
+  h2 { font-size:1.05rem; margin:22px 0 10px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:560px){ .row{ grid-template-columns:1fr; } }
+  label { display:block; font-size:.85rem; color:var(--muted); margin-bottom:4px; }
+  input, select { width:100%; padding:10px 12px; font-size:1rem; border:1px solid var(--line);
+                  border-radius:8px; background:var(--bg); color:var(--text); }
+  input[type=range] { padding:0; }
+  button { margin-top:22px; width:100%; padding:14px; font-size:1.05rem; font-weight:600;
+           color:#fff; background:var(--accent); border:0; border-radius:10px; cursor:pointer; }
+  button:hover { filter:brightness(1.1); }
+  #result { margin-top:20px; padding:18px; border-radius:12px; text-align:center;
+            font-size:1.2rem; font-weight:700; white-space:pre-line; display:none; }
+  #result.bad { background:#fee2e2; color:#991b1b; }
+  #result.ok  { background:#dcfce7; color:#166534; }
+  #result small { display:block; font-weight:500; font-size:.95rem; margin-top:6px; }
+  .err { color:#b91c1c; text-align:center; margin-top:12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="icon">
+    <h1>⚙️ Machine Failure Prediction</h1>
+  </header>
+  <p class="sub">Predictive Maintenance System — enter the machine parameters.</p>
+
+  <h2>🌡️ Temperature</h2>
+  <div class="row">
+    <div><label for="air">Air Temperature (°C)</label><input id="air" type="number" step="any" value="26.95"></div>
+    <div><label for="proc">Process Temperature (°C)</label><input id="proc" type="number" step="any" value="36.95"></div>
+  </div>
+
+  <h2>⚙️ Machine Performance</h2>
+  <div class="row">
+    <div><label for="rpm">Rotational Speed (RPM)</label><input id="rpm" type="number" step="any" value="1503"></div>
+    <div><label for="torque">Torque (Nm)</label><input id="torque" type="number" step="any" value="40"></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <div><label for="wear">Tool Wear (min): <b id="wearVal">108</b></label>
+      <input id="wear" type="range" min="0" max="253" step="1" value="108"></div>
+    <div><label for="type">Machine Type</label>
+      <select id="type"><option>L</option><option selected>M</option><option>H</option></select></div>
+  </div>
+
+  <button id="go">🔍 Predict Machine Status</button>
+  <div id="result"></div>
+  <div id="error" class="err"></div>
+</main>
+
+<script>
+let MODEL = null;
+
+fetch("model.json").then(r => r.json()).then(m => { MODEL = m; })
+  .catch(() => { document.getElementById("error").textContent = "Could not load model.json"; });
+
+document.getElementById("wear").addEventListener("input", e =>
+  document.getElementById("wearVal").textContent = e.target.value);
+
+function evalTree(t, x) {
+  while (Array.isArray(t)) t = x[t[0]] < Math.fround(t[1]) ? t[2] : t[3];
+  return t;
+}
+
+function predictProba(raw) {
+  // raw = [air, process, rpm, torque, wear]; scale, then one-hot Type (H, L, M)
+  // XGBoost compares in float32, so round the same way to match Python exactly
+  const x = raw.map((v, i) => Math.fround((v - MODEL.mean[i]) / MODEL.scale[i]));
+  MODEL.types.forEach(t => x.push(t === raw.type ? 1 : 0));
+  let margin = MODEL.base_margin;
+  for (const t of MODEL.trees) margin += evalTree(t, x);
+  return 1 / (1 + Math.exp(-margin));
+}
+
+document.getElementById("go").addEventListener("click", () => {
+  if (!MODEL) return;
+  const g = id => parseFloat(document.getElementById(id).value);
+  const raw = [g("air"), g("proc"), g("rpm"), g("torque"), g("wear")];
+  if (raw.some(Number.isNaN)) { document.getElementById("error").textContent = "Please fill in all numeric fields."; return; }
+  document.getElementById("error").textContent = "";
+  raw.type = document.getElementById("type").value;
+
+  const p = predictProba(raw);
+  const box = document.getElementById("result");
+  const risky = p >= 0.5;
+  box.className = risky ? "bad" : "ok";
+  box.style.display = "block";
+  box.innerHTML = (risky ? "🔴 MACHINE FAILURE RISK" : "🟢 MACHINE OK") +
+    `<small>Failure Probability: ${(p * 100).toFixed(2)}%</small>` +
+    `<small>${risky ? "⚠️ Maintenance is recommended." : "✅ The machine is operating normally."}</small>`;
+});
+</script>
+</body>
+</html>

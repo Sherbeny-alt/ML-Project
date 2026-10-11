@@ -48,4 +48,4 @@ with gr.Blocks() as demo:
     btn.click(predict_machine, [air, proc, rpm, torque, wear, mtype], out)
 
 if __name__ == "__main__":
-    demo.launch(theme=gr.themes.Soft())
+    demo.launch(theme=gr.themes.Soft(), favicon_path="icon.ico")
